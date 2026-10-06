@@ -2,5 +2,17 @@ node_modules/
 .env
 .env.local
 *.md.out
-report*.md
 .pentest-challenges.json
+
+# Scan output: report.md, report-backend.md, mariposa-report.md, x_report.md.
+# Reports describe OTHER projects' vulnerabilities and must never be committed.
+report.md
+report-*.md
+report_*.md
+*-report.md
+*_report.md
+*-report-*.md
+
+# Guard module local state (journals, baselines) and real site configs.
+.guard-data/
+guard-sites/

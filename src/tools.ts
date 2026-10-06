@@ -26,7 +26,14 @@ const BINARY_EXT = new Set([
 // project. Same patterns as .gitignore, because that is exactly what these
 // are, artifacts, not code, and scanning your own prior output is how you
 // end up auditing yourself.
-const SKIP_FILE_PATTERNS = [/^report.*\.md$/i, /\.md\.out$/i, /^\.pentest-challenges\.json$/i];
+const SKIP_FILE_PATTERNS = [
+  // "report" as a delimited word anywhere in the name: report.md, report-backend.md,
+  // mariposa-report.md, supermnl_report.md. The first version only matched names
+  // that STARTED with "report", and a real output file slipped straight through.
+  /(^|[-_.])report([-_.][^/\\]*)?\.md$/i,
+  /\.md\.out$/i,
+  /^\.pentest-challenges\.json$/i,
+];
 
 const MAX_FILE_BYTES = 40_000;
 const MAX_GREP_HITS = 18;
