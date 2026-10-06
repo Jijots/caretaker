@@ -1,0 +1,8 @@
+{
+  "id": "acme-wix",
+  "name": "Acme Catering (Wix)",
+  "baseUrl": "https://acmecatering.example.ph",
+  "platform": "wix",
+  "transport": { "type": "none" },
+  "pages": ["/", "/menu"]
+}

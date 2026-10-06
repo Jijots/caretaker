@@ -8,6 +8,8 @@ Built because I was doing this pass by hand before every launch, from memory, an
 
 **It reports, it does not fix.** Read-only is enforced at the process boundary, not in a prompt: the Claude Code provider is launched with `--allowedTools Read Grep Glob`, so no write, edit or shell tool exists in the run at all. An agent that edits code unsupervised is a much worse trade than one that points at a line and explains itself.
 
+**That claim covers the scanner, and only the scanner.** The optional [guard module](src/guard/README.md) (defacement detection and response) is different on purpose: its responder can restore files, quarantine them and block addresses, so it is isolated rather than blended in. It is a separate command that `guard run` never starts, it is off per site until the site's config enables it, it is dry-run until that config says `live`, and the scanner never imports any of it. Delete `src/guard/` and the scanner is unchanged.
+
 **Every finding cites a file and a line it actually read.** Findings without a location are dropped by the harness before they reach you, not merely discouraged in the prompt.
 
 **It is allowed to say it does not know.** Output has three buckets, not two:
@@ -98,6 +100,8 @@ src/
   verify.ts         ownership verification for the active scan, no bypass
   pentest.ts        Nuclei wrapper + its own console/markdown output
   index.ts         CLI, routes a URL target to pentest mode, a directory to the static scan
+  guard/           optional defacement detection and response module, self-contained.
+                   Its own CLI (npm run guard) and tests (npm test). See guard/README.md
 ```
 
 Two providers exist on purpose. The Claude Code path is what you run. The API path in `agent.ts` is the loop written by hand, with its own sandbox, retry-on-429 and context pruning, and it is the one worth reading if you want to see how the loop actually works.

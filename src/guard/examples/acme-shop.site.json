@@ -1,0 +1,18 @@
+{
+  "id": "acme-shop",
+  "name": "Acme Shop (Next.js on Vercel)",
+  "baseUrl": "https://shop.acme.example.ph",
+  "platform": "nextjs",
+  "timezone": "Asia/Manila",
+  "transport": {
+    "type": "git",
+    "remote": "git@github.com:acme/shop.git",
+    "branch": "main",
+    "deployHookEnv": "GUARD_VERCEL_DEPLOY_HOOK_ACME_SHOP"
+  },
+  "pages": ["/", "/products"],
+  "pageRegions": [
+    { "page": "/products", "selector": "[data-stock-level]", "reason": "stock counts change on every sale" }
+  ],
+  "responder": { "enabled": false }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "acme-clinic",
+  "name": "Acme Dental Clinic (WordPress on cPanel)",
+  "baseUrl": "https://acmedental.example.ph",
+  "platform": "wordpress",
+  "timezone": "Asia/Manila",
+  "transport": { "type": "local-fs", "root": "/home/acmedental/public_html" },
+  "pages": ["/", "/services", "/contact"],
+  "deployWindows": [
+    { "days": ["mon", "tue", "wed", "thu", "fri"], "start": "09:00", "end": "17:00", "note": "the developer ships during office hours only" }
+  ],
+  "pageRegions": [
+    { "page": "/", "selector": ".latest-posts", "reason": "blog teaser changes whenever a post is published" },
+    { "page": "*", "selector": "#visitor-counter", "reason": "live counter in the footer" }
+  ],
+  "owner": { "telegramChatIdEnv": "GUARD_TELEGRAM_CHAT_ACME_CLINIC" },
+  "responder": {
+    "enabled": false,
+    "mode": "dry-run",
+    "ipAllowlist": ["203.0.113.10"]
+  }
+}
