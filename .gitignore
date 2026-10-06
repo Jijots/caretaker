@@ -1,0 +1,6 @@
+node_modules/
+.env
+.env.local
+*.md.out
+report*.md
+.pentest-challenges.json
