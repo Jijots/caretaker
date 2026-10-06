@@ -19,6 +19,7 @@ import { isIP } from "node:net";
 import { promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
 import { SiteId } from "./events.js";
+import { isTotalGlob } from "./glob.js";
 
 export const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const; // index matches Date#getDay
 const Day = z.enum(DAYS);
@@ -109,6 +110,42 @@ export const Responder = z
   .strict();
 export type Responder = z.infer<typeof Responder>;
 
+const RelGlob = z
+  .string()
+  .min(1)
+  .max(300)
+  .refine((g) => !g.replace(/\\/g, "/").split("/").includes(".."), "may not contain ..")
+  .refine((g) => !/^([a-zA-Z]:|[/\\])/.test(g), "relative to the site root, without a leading slash");
+
+/**
+ * What the Integrity watcher looks at. Patterns are globs relative to the site
+ * root (see glob.ts). Platform defaults are added unless turned off, so a
+ * WordPress site gets its cache excluded and its uploads treated as uploads
+ * without anyone having to know those paths.
+ */
+export const IntegrityRules = z
+  .object({
+    platformDefaults: z.boolean().default(true),
+    include: z.array(RelGlob).min(1).max(100).default(["**"]),
+    exclude: z
+      .array(RelGlob.refine((g) => !isTotalGlob(g), "that pattern excludes every file and would disable the Integrity watcher"))
+      .max(200)
+      .default([]),
+    /**
+     * Where visitors' files land. Content here changes all the time and is not
+     * baselined, but every pass checks it for anything that could execute.
+     */
+    uploadDirs: z.array(RelGlob).max(50).default([]),
+    intervalSeconds: z.number().int().min(30).max(86_400).default(300),
+    /** Every Nth pass rehashes every file instead of trusting size, mtime and ctime. */
+    fullRehashEvery: z.number().int().min(1).max(1000).default(12),
+    maxFiles: z.number().int().min(100).max(1_000_000).default(100_000),
+    /** Larger files are baselined by hash only, so they can be detected but not restored. */
+    maxStoreBytes: z.number().int().min(1024).max(200 * 1024 * 1024).default(10 * 1024 * 1024),
+  })
+  .strict();
+export type IntegrityRules = z.infer<typeof IntegrityRules>;
+
 export const SITE_PLATFORMS = ["wordpress", "nextjs", "laravel", "codeigniter", "wix", "static", "other"] as const;
 
 export const SiteConfig = z
@@ -144,6 +181,7 @@ export const SiteConfig = z
     pageRegions: z.array(PageRegion).max(100).default([]),
     owner: z.object({ telegramChatIdEnv: EnvName.optional() }).strict().default({}),
     responder: Responder.default({}),
+    integrity: IntegrityRules.default({}),
   })
   .strict()
   .superRefine((s, ctx) => {
@@ -255,4 +293,46 @@ export function assertDataDirOffHost(dataDir: string, sites: Iterable<SiteConfig
     }
   }
   if (problems.length) throw new ConfigError(problems);
+}
+
+/* ------------------------------------------------- integrity defaults */
+
+export interface EffectiveIntegrityRules {
+  include: string[];
+  exclude: string[];
+  uploadDirs: string[];
+}
+
+/** Always excluded: version control internals change on every pull and are not served. */
+const ALWAYS_EXCLUDE = [".git/**", ".svn/**", ".hg/**"];
+
+/** Generated or volatile paths per platform, and where uploads land. Sources: each platform's documented directory layout. */
+export const PLATFORM_INTEGRITY: Record<SiteConfig["platform"], { exclude: string[]; uploadDirs: string[] }> = {
+  wordpress: {
+    exclude: ["wp-content/cache/**", "wp-content/upgrade/**", "wp-content/debug.log", "wp-content/wflogs/**"],
+    uploadDirs: ["wp-content/uploads/**"],
+  },
+  laravel: {
+    exclude: ["storage/framework/**", "storage/logs/**", "bootstrap/cache/**"],
+    uploadDirs: ["storage/app/public/**", "public/storage/**", "public/uploads/**"],
+  },
+  codeigniter: {
+    exclude: ["writable/cache/**", "writable/logs/**", "writable/session/**", "writable/debugbar/**", "application/cache/**", "application/logs/**"],
+    uploadDirs: ["writable/uploads/**", "public/uploads/**", "uploads/**"],
+  },
+  nextjs: { exclude: [".next/cache/**", "node_modules/.cache/**"], uploadDirs: ["public/uploads/**"] },
+  static: { exclude: [], uploadDirs: [] },
+  wix: { exclude: [], uploadDirs: [] },
+  other: { exclude: [], uploadDirs: [] },
+};
+
+export function effectiveIntegrityRules(site: SiteConfig): EffectiveIntegrityRules {
+  const r = site.integrity;
+  const d = r.platformDefaults ? PLATFORM_INTEGRITY[site.platform] : { exclude: [], uploadDirs: [] };
+  const uniq = (xs: string[]) => [...new Set(xs)];
+  return {
+    include: uniq(r.include),
+    exclude: uniq([...ALWAYS_EXCLUDE, ...d.exclude, ...r.exclude]),
+    uploadDirs: uniq([...d.uploadDirs, ...r.uploadDirs]),
+  };
 }

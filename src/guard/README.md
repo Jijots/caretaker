@@ -14,7 +14,7 @@ Delete the folder and the scanner is unchanged.
 | Phase | What | State |
 |---|---|---|
 | 1 | Event contract, queue, orchestrator, policy, per-site config, hash-chained journal | **Done** |
-| 2 | Integrity watcher and baseline tooling, local filesystem transport | Planned |
+| 2 | Integrity watcher and baseline tooling, local filesystem transport | **Done** |
 | 3 | Page watcher (headless Chromium, DOM and screenshot diff) | Planned |
 | 4 | Traffic and log watcher | Planned |
 | 5 | Responder (dry-run, then live), git restore adapter, approval flow | Planned |
@@ -22,8 +22,10 @@ Delete the folder and the scanner is unchanged.
 | 7 | Reporter, owner notifications (Telegram first) | Planned |
 | 8 | Incident history views, if there is a UI to put them in | Planned |
 
-Phase 1 reads and records. **Nothing in this module changes a monitored site
-yet.** There are no workers, so there is nothing to detect until Phase 2.
+Phases 1 and 2 read and record. **Nothing in this module changes a monitored
+site yet.** The Integrity watcher is the only worker so far, so file changes,
+new and removed files, and executables in upload directories are detected.
+Pages, traffic and scanning arrive in later phases.
 
 ## This changes what the repo claims
 
@@ -85,7 +87,7 @@ flowchart LR
   class S,I,P,T,R,RP,OW,TR planned;
 ```
 
-Solid green is built in Phase 1. Dashed grey is planned.
+Solid green is built (Phases 1 and 2). Dashed grey is planned.
 
 ## Guardrails
 
@@ -99,7 +101,7 @@ The "where" column says which file to read.
 | Destructive actions run automatically only when confidence is high AND the change does not match a known deploy or commit. Anything uncertain goes to the owner | `policy.ts` `decide()` |
 | The responder defaults to dry-run. Live needs explicit per-site config | `config.ts` `Responder`; `policy.ts` stamps every action with the site's mode |
 | Every action is audited, and every restore backs up the defaced state first | Journal: `journal.ts`. The backup is a Phase 5 responder duty and is not built yet |
-| Workers are deterministic and call no LLM | Phase 1 has no LLM anywhere. The only LLM entry point is `applyLlmVerdict()`, which is escalate-only (below) |
+| Workers are deterministic and call no LLM | No phase so far has an LLM anywhere. The only LLM entry point is `applyLlmVerdict()`, which is escalate-only (below) |
 | LLM output never executes anything; it is validated against a schema | `events.ts` schemas; `policy.ts` `applyLlmVerdict()` returns a new `Decision` validated by the same schema |
 | Never log or store secrets | `config.ts`: secrets are referenced by env var NAME and the schema rejects anything else, without echoing the rejected value |
 
@@ -254,6 +256,12 @@ are in `src/guard/examples/`.
 | `responder.autoRestoreMinConfidence` | 0.5 to 1, default 0.9 |
 | `responder.autoBlockIps`, `ipBlockTtlMinutes`, `ipAllowlist` | default off, 60, empty |
 | `responder.maxRestoresPerWindow`, `restoreWindowMinutes` | loop breaker, default 2 in 60 |
+| `integrity.platformDefaults` | default `true`. Adds the platform's cache and log paths to `exclude` and its upload paths to `uploadDirs` (see below) |
+| `integrity.include`, `exclude` | globs relative to the site root. Default include `["**"]`. An exclude that matches every file is refused. `.git/`, `.svn/` and `.hg/` are always excluded |
+| `integrity.uploadDirs` | globs where visitors' files land. Not baselined, but every pass checks them for anything executable |
+| `integrity.intervalSeconds` | 30 to 86400, default 300 |
+| `integrity.fullRehashEvery` | every Nth pass rehashes every file instead of trusting size, mtime and ctime. Default 12 |
+| `integrity.maxFiles`, `maxStoreBytes` | file-count ceiling (a larger site fails loudly rather than being half watched), and the size above which a file is baselined by hash only and so cannot be restored. Defaults 100000 and 10 MB |
 
 `SiteTransport` is read-only by type: watchers are only ever handed it, so they
 cannot change a site by mistake. Writing (restore, quarantine, maintenance
@@ -266,6 +274,64 @@ Guard-wide settings come from the environment:
 | `GUARD_DATA_DIR` | journals and baselines. Default `./.guard-data`. Must not be inside a monitored web root |
 | `GUARD_SITES_DIR` | site configs. Default `./guard-sites` |
 | `GUARD_JOURNAL_KEY` | 32 or more characters. Makes the journal an HMAC chain |
+
+## The Integrity watcher and baselines
+
+```bash
+npm run caretaker -- baseline snapshot acme-clinic --note "fresh deploy"
+npm run caretaker -- integrity check acme-clinic     # one pass, printed, nothing queued
+npm run caretaker -- run                             # watches every site that has a baseline
+```
+
+A **baseline** is the known-good state: a SHA-256 for every watched file, plus a
+stored copy of each file under `maxStoreBytes`, kept in `GUARD_DATA_DIR` and never
+on the monitored host. A restore has to copy from somewhere the attacker could
+not have edited, which is why the copies are kept there.
+
+**What it emits**
+
+| Event | When | Severity, confidence |
+|---|---|---|
+| `integrity.file_changed` | a baselined file's hash differs | high 0.75. Critical 0.85 for an entry point (`index.*`, `.htaccess`, `.user.ini`, `wp-config.php`, `default.*`, `home.*`) |
+| `integrity.file_added` | a file outside the baseline and outside the upload directories | medium 0.6 |
+| `integrity.file_removed` | a baselined file is gone, and the directory could be read | medium 0.5. Critical 0.8 for an entry point |
+| `integrity.executable_in_uploads` | an upload directory holds a script extension on any dot-separated part (so `shell.php.jpg` counts), a server config file (`.htaccess`, `.user.ini`, `web.config`), or script markers in the first 4 KB of a file named like an image | critical 0.9 |
+
+Changed, added and removed files are deploy-explainable, so an incident made
+only of them inside a deploy window stays `suspicious` and goes to a person. An
+executable in uploads is not, so a deploy window never explains it away.
+
+**Platform defaults** (turn off with `integrity.platformDefaults: false`):
+
+| Platform | Excluded | Upload directories |
+|---|---|---|
+| wordpress | `wp-content/cache/**`, `upgrade/**`, `debug.log`, `wflogs/**` | `wp-content/uploads/**` |
+| laravel | `storage/framework/**`, `storage/logs/**`, `bootstrap/cache/**` | `storage/app/public/**`, `public/storage/**`, `public/uploads/**` |
+| codeigniter | `writable/{cache,logs,session,debugbar}/**`, `application/{cache,logs}/**` | `writable/uploads/**`, `public/uploads/**`, `uploads/**` |
+| nextjs | `.next/cache/**`, `node_modules/.cache/**` | `public/uploads/**` |
+
+These are a starting point drawn from each platform's usual layout. Check them
+against the real site. A path that is excluded by mistake is a blind spot.
+
+**Behaviour worth knowing**
+
+- A pass trusts size, mtime and ctime to skip rehashing. mtime can be set back by
+  an attacker, ctime cannot be by an ordinary user, and every Nth pass rehashes
+  everything as the backstop.
+- A difference is reported once, again if the file changes again, and forgotten
+  when it is fixed. Otherwise one defaced file would raise an event every
+  interval for as long as it stayed that way.
+- At most 25 events per type per pass are itemised, then one summary event says
+  how many more there were. A flood is not silently dropped.
+- A directory that cannot be read is reported and never treated as "its files were
+  removed".
+- Symlinks are reported but never followed, and a symlinked directory is not
+  descended into, so a link planted in the web root cannot make the watcher read
+  or hash anything outside it. A retargeted symlink counts as a change.
+- A baseline that fails its digest check, or whose key does not match, stops
+  that site being watched. The reason goes in the journal (`worker_unavailable`)
+  and on screen. Watching against a baseline that cannot be trusted would
+  report nonsense or nothing.
 
 ## The journal
 
@@ -295,6 +361,9 @@ npm run caretaker -- validate src/guard/examples/acme-clinic.site.json
 npm run caretaker -- validate --all
 npm run caretaker -- journal verify [--file F] [--expected-head HASH]
 npm run caretaker -- journal head [--file F]
+npm run caretaker -- baseline snapshot <site-id> [--note TEXT]
+npm run caretaker -- baseline show <site-id>
+npm run caretaker -- integrity check <site-id>     # exit 2 if anything differs
 npm run caretaker -- run [--once]
 npm test
 ```
@@ -308,8 +377,26 @@ npm test
 - **Plugin CVE matching is weak without a paid feed.** v1 uses Nuclei's CVE
   templates and free NVD data. NVD matches WordPress plugins poorly. WPScan or
   Patchstack could be revisited if their free tiers fit.
-- **No transport is implemented yet.** The interface and the capability map
-  exist; the local filesystem implementation arrives with Phase 2.
+- **A snapshot trusts the site as it is.** If the site is already defaced or
+  backdoored when the baseline is taken, that becomes "normal". The CLI says so
+  every time. Checking against a vendor's published checksums (WordPress.org
+  publishes them for core) or a git commit is a stronger source and is not built
+  yet; the manifest records its `source` so one can be added.
+- **Only the local filesystem transport exists.** A site on shared hosting needs
+  its web root reachable from where Caretaker runs (a mount, or an rsync mirror
+  of the host). Reading over SFTP or FTP is not implemented. Git comes in Phase 5.
+- **The baseline digest is not a defence against a compromised data directory.**
+  Keyed with `GUARD_JOURNAL_KEY` it resists forgery by someone who lacks the key.
+  Anyone holding both the directory and the key can rewrite everything.
+- **mtime and ctime are filesystem facts.** On a mount that does not report ctime
+  honestly, only the periodic full rehash catches a rewrite that restored size and
+  mtime. Lower `fullRehashEvery` if the site is on such a mount.
+- **No cross-pass memory of the baseline.** The baseline is loaded when `run`
+  starts. After a legitimate deploy, take a new snapshot and restart `run`.
+  Anything else would let a defacement redefine normal by itself.
+- **Executable detection is by name and a 4 KB sniff.** A webshell that is not
+  named like a script, does not start with a marker in its first 4 KB, and is
+  served through some other route is not caught here.
 - **Events are not redelivered after a crash.** An event journaled but not yet
   delivered when the process dies is not replayed. Workers compare against a
   baseline on every pass, so a real condition is detected again.

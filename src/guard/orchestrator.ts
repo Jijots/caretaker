@@ -132,7 +132,7 @@ export function proposeActions(events: SecurityEvent[], confirmed: boolean): Pro
   const out: ProposedAction[] = [];
   const pathsOf = (types: string[]) => [...new Set(events.filter((e) => types.includes(e.type)).flatMap((e) => e.indicators.paths))].slice(0, 50);
 
-  const changed = pathsOf(["integrity.file_changed"]);
+  const changed = pathsOf(["integrity.file_changed", "integrity.file_removed"]);
   if (changed.length) out.push({ kind: "restore_files", params: { paths: changed }, reason: "watched files differ from the known-good baseline" });
 
   const dropped = pathsOf(["integrity.file_added", "integrity.executable_in_uploads"]);

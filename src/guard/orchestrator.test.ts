@@ -303,3 +303,11 @@ test("orchestrator performs no action itself: it only emits decisions", async ()
     for (const k of kinds) assert.ok(["event", "incident", "decision"].includes(k), `unexpected journal kind: ${k}`);
   });
 });
+
+test("a removed file is restorable, a dropped file is quarantined, and neither is confused with the other", () => {
+  const removed = ev({ type: "integrity.file_removed", indicators: { paths: ["index.php"] } });
+  const added = ev({ type: "integrity.file_added", indicators: { paths: ["x.php"] } });
+  const out = proposeActions([removed, added], false);
+  assert.deepEqual(out.find((a) => a.kind === "restore_files")?.params, { paths: ["index.php"] });
+  assert.deepEqual(out.find((a) => a.kind === "quarantine_file")?.params, { paths: ["x.php"] });
+});

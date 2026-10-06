@@ -101,6 +101,10 @@ export const DETECTION_TYPES = {
     worker: "integrity", owasp: ["A08"], attack: ["T1491.002"], nist: ["detect"], deployExplainable: true,
     description: "A new file appeared in a watched path.",
   },
+  "integrity.file_removed": {
+    worker: "integrity", owasp: ["A08"], attack: ["T1491.002"], nist: ["detect"], deployExplainable: true,
+    description: "A file in the baseline is gone. Removing an index page or a .htaccess changes what visitors get.",
+  },
   "integrity.executable_in_uploads": {
     worker: "integrity", owasp: ["A01"], attack: ["T1505.003", "T1190"], nist: ["detect"], deployExplainable: false,
     description: "An executable script appeared in an upload directory (webshell indicator).",
