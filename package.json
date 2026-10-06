@@ -6,6 +6,7 @@
   "description": "A read-only tool-calling agent that runs a pre-launch security pass over a codebase and reports findings for a human to confirm.",
   "scripts": {
     "scan": "tsx src/index.ts",
+    "caretaker": "tsx src/guard/cli.ts",
     "guard": "tsx src/guard/cli.ts",
     "test": "node --import tsx --test \"src/guard/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"

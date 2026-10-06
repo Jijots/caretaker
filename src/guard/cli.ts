@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Entrypoint for the guard module: `npm run guard -- <command>`.
+ * Entrypoint for the guard module: `npm run caretaker -- <command>`.
  *
  * Deliberately separate from the static scanner's CLI (src/index.ts), which
  * stays read-only. Nothing here changes a monitored site in Phase 1, and the
@@ -29,17 +29,17 @@ function fail(lines: string | string[]): never {
 }
 
 const HELP = `
-${C.bold}guard${C.reset}  defacement detection and response, as a module of security-pass
+${C.bold}Caretaker${C.reset}  defacement detection and response, as a module of security-pass
 
-  npm run guard -- validate <file.site.json>     check one site config
-  npm run guard -- validate --all                check every site in GUARD_SITES_DIR, and that the
+  npm run caretaker -- validate <file.site.json>     check one site config
+  npm run caretaker -- validate --all                check every site in GUARD_SITES_DIR, and that the
                                                  data directory is not inside a monitored web root
-  npm run guard -- journal verify [--file F] [--expected-head HASH]
+  npm run caretaker -- journal verify [--file F] [--expected-head HASH]
                                                  verify the hash chain; --expected-head catches
                                                  entries deleted from the end
-  npm run guard -- journal head [--file F]       print the current head, to store somewhere the
+  npm run caretaker -- journal head [--file F]       print the current head, to store somewhere the
                                                  monitored host cannot reach
-  npm run guard -- run [--once]                  start the orchestrator (Phase 1 has no workers yet)
+  npm run caretaker -- run [--once]                  start the orchestrator (Phase 1 has no workers yet)
 
 Environment
   GUARD_DATA_DIR      journals and baselines. Default ./.guard-data. Keep it OFF the monitored host.
@@ -156,7 +156,7 @@ async function main() {
     await new Promise<void>(() => undefined); // run until signalled
   }
 
-  fail(`unknown command '${cmd}'. Try: npm run guard -- help`);
+  fail(`unknown command '${cmd}'. Try: npm run caretaker -- help`);
 }
 
 main().catch((e) => {

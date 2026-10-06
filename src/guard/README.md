@@ -1,4 +1,4 @@
-# guard: defacement detection and response
+# Caretaker: defacement detection and response
 
 An optional module of security-pass that watches small websites for defacement
 (overwritten index pages, injected scripts or iframes, dropped webshells,
@@ -290,12 +290,12 @@ taken over).
 ## Commands
 
 ```bash
-npm run guard -- help
-npm run guard -- validate src/guard/examples/acme-clinic.site.json
-npm run guard -- validate --all
-npm run guard -- journal verify [--file F] [--expected-head HASH]
-npm run guard -- journal head [--file F]
-npm run guard -- run [--once]
+npm run caretaker -- help
+npm run caretaker -- validate src/guard/examples/acme-clinic.site.json
+npm run caretaker -- validate --all
+npm run caretaker -- journal verify [--file F] [--expected-head HASH]
+npm run caretaker -- journal head [--file F]
+npm run caretaker -- run [--once]
 npm test
 ```
 
