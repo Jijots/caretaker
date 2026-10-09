@@ -18,7 +18,12 @@ import { BaselineError, BaselineStore } from "./baseline.js";
 import { IntegrityWatcher } from "./integrity.js";
 import { LocalFsTransport } from "./transport-local.js";
 import { TransportError } from "./transport.js";
-import { prepareIntegrityWorkers } from "./runner.js";
+import { combineWorkers, prepareIntegrityWorkers } from "./runner.js";
+import { preparePageWorkers } from "./page-runner.js";
+import { PageBaselineStore, snapshotPages } from "./page-baseline.js";
+import { PageWatcher, type LoadedPageBaseline } from "./page-watcher.js";
+import type { PageFetcher } from "./page-digest.js";
+import { BrowserUnavailableError, launchBrowser } from "./browser.js";
 
 const C = { bold: "\x1b[1m", grey: "\x1b[90m", reset: "\x1b[0m", red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m" };
 
@@ -44,10 +49,13 @@ ${C.bold}Caretaker${C.reset}  defacement detection and response, as a module of 
                                                  entries deleted from the end
   npm run caretaker -- journal head [--file F]       print the current head, to store somewhere the
                                                  monitored host cannot reach
-  npm run caretaker -- baseline snapshot <site-id>   record the site as it is NOW as the known-good state
+  npm run caretaker -- baseline snapshot <site-id> [--files | --pages]
+                                                 record the site as it is NOW as the known-good state:
+                                                 its files (local-fs) and how its pages render
   npm run caretaker -- baseline show <site-id>       what the baseline holds, and when it was taken
-  npm run caretaker -- integrity check <site-id>     one comparison against the baseline, printed, nothing queued
-  npm run caretaker -- run [--once]                  start the orchestrator and the Integrity watcher
+  npm run caretaker -- integrity check <site-id>     one comparison of the files, printed, nothing queued
+  npm run caretaker -- page check <site-id>          one comparison of the rendered pages, printed, nothing queued
+  npm run caretaker -- run [--once]                  start the orchestrator and every watcher that has a baseline
 
 Environment
   GUARD_DATA_DIR      journals and baselines. Default ./.guard-data. Keep it OFF the monitored host.
@@ -115,55 +123,111 @@ async function main() {
     fail("usage: journal verify | journal head");
   }
 
-  if (cmd === "baseline" || cmd === "integrity") {
+  if (cmd === "baseline" || cmd === "integrity" || cmd === "page") {
     const [sub, siteId] = rest;
-    if (!siteId || !((cmd === "baseline" && (sub === "snapshot" || sub === "show")) || (cmd === "integrity" && sub === "check"))) {
-      fail("usage: baseline snapshot <site-id> | baseline show <site-id> | integrity check <site-id>");
+    const known = (cmd === "baseline" && (sub === "snapshot" || sub === "show")) || (cmd === "integrity" && sub === "check") || (cmd === "page" && sub === "check");
+    if (!siteId || !known) {
+      fail("usage: baseline snapshot <site-id> [--files | --pages] | baseline show <site-id> | integrity check <site-id> | page check <site-id>");
     }
+    let fetcher: PageFetcher | undefined;
     try {
       const sites = await loadSites(paths.sitesDir);
       assertDataDirOffHost(paths.dataDir, sites.values());
       const site = sites.get(siteId);
       if (!site) fail(`no site '${siteId}' in ${paths.sitesDir}. Known: ${[...sites.keys()].join(", ") || "(none)"}`);
-      if (site.transport.type !== "local-fs") fail(`site '${siteId}' uses transport '${site.transport.type}', which cannot be read. The Integrity watcher needs local-fs.`);
       const store = new BaselineStore(paths.dataDir, paths.journalKey);
+      const pageStore = new PageBaselineStore(paths.dataDir, paths.journalKey);
+      const local = site.transport.type === "local-fs";
+      const needFiles = () => {
+        if (!local) fail(`site '${siteId}' uses transport '${site.transport.type}', which cannot be read. File integrity needs local-fs.`);
+      };
+      const hint = `npm run caretaker -- baseline snapshot ${siteId}`;
 
       if (cmd === "baseline" && sub === "show") {
-        const b = await store.load(siteId);
-        if (!b) fail(`no baseline for '${siteId}'. Run: npm run caretaker -- baseline snapshot ${siteId}`);
-        const files = Object.values(b.files);
-        console.log(`${C.green}ok${C.reset} ${siteId}: ${files.length} files, ${files.filter((x) => x.stored).length} restorable, taken ${b.createdAt} (source: ${b.source})`);
-        if (b.note) console.log(`  note: ${b.note}`);
+        let any = false;
+        const b = local ? await store.load(siteId) : null;
+        if (b) {
+          any = true;
+          const files = Object.values(b.files);
+          console.log(`${C.green}ok${C.reset} ${siteId}: ${files.length} files, ${files.filter((x) => x.stored).length} restorable, taken ${b.createdAt} (source: ${b.source})`);
+          if (b.note) console.log(`  note: ${b.note}`);
+        }
+        for (const p of site.pages) {
+          const pb = await pageStore.load(siteId, p);
+          if (!pb) continue;
+          any = true;
+          const x = pb.body;
+          console.log(`${C.green}ok${C.reset} ${siteId} ${p}: ${x.texts.length} text blocks (${x.volatile.length} volatile), ${x.scriptOrigins.length} external script origin(s), ${x.iframes.length} frame(s), screenshot ${x.pngSha256 ? "yes" : "no"}, taken ${x.createdAt}`);
+          for (const w of x.warnings) console.log(`  ${C.yellow}${w}${C.reset}`);
+        }
+        if (!any) fail(`no baseline for '${siteId}'. Run: ${hint}`);
         return;
       }
 
-      const transport = await LocalFsTransport.open(site.transport.root);
       if (cmd === "baseline") {
-        const r = await store.snapshot(site, transport, { note: opt(rest, "note") });
-        console.log(`${C.green}ok${C.reset} baseline for ${siteId}: ${Object.keys(r.body.files).length} files (${r.stored} stored for restore, ${r.hashOnly} hash only)`);
-        console.log(`  written to ${store.dir(siteId)}`);
+        const wantFiles = !has(rest, "pages");
+        const wantPages = !has(rest, "files");
+        if (wantFiles && local) {
+          const transport = await LocalFsTransport.open((site.transport as { root: string }).root);
+          const r = await store.snapshot(site, transport, { note: opt(rest, "note") });
+          console.log(`${C.green}ok${C.reset} file baseline for ${siteId}: ${Object.keys(r.body.files).length} files (${r.stored} stored for restore, ${r.hashOnly} hash only)`);
+          console.log(`  written to ${store.dir(siteId)}`);
+          if (!paths.journalKey) console.log(`${C.grey}(unkeyed: set GUARD_JOURNAL_KEY so the baseline cannot be forged by someone who can write the data directory)${C.reset}`);
+          if (r.skippedUnreadable.length) console.log(`${C.yellow}${r.skippedUnreadable.length} path(s) could not be read and are NOT in the baseline, e.g. ${r.skippedUnreadable[0]}${C.reset}`);
+        } else if (has(rest, "files")) {
+          needFiles();
+        }
+        if (wantPages) {
+          fetcher = await launchBrowser();
+          console.log(`${C.grey}loading ${site.pages.length} page(s) of ${site.baseUrl} twice each, a few seconds apart...${C.reset}`);
+          const done = await snapshotPages(site, fetcher, pageStore);
+          for (const r of done) {
+            const x = r.body;
+            console.log(`${C.green}ok${C.reset} page baseline ${siteId} ${r.path}: ${x.texts.length} stable text blocks, ${r.volatileCount} volatile ignored, ${x.scriptOrigins.length} external script origin(s), screenshot ${x.pngSha256 ? "yes" : "no"}`);
+            for (const w of x.warnings) console.log(`  ${C.yellow}${w}${C.reset}`);
+          }
+        }
         console.log(`${C.yellow}This records the site exactly as it is right now. If it is already defaced or backdoored, that is now "normal".${C.reset}`);
         console.log(`${C.yellow}Take it from a site you have just deployed or just verified, not one you are unsure about.${C.reset}`);
-        if (!paths.journalKey) console.log(`${C.grey}(unkeyed: set GUARD_JOURNAL_KEY so the baseline cannot be forged by someone who can write the data directory)${C.reset}`);
-        if (r.skippedUnreadable.length) console.log(`${C.yellow}${r.skippedUnreadable.length} path(s) could not be read and are NOT in the baseline, e.g. ${r.skippedUnreadable[0]}${C.reset}`);
         return;
       }
 
-      const baseline = await store.load(siteId);
-      if (!baseline) fail(`no baseline for '${siteId}'. Run: npm run caretaker -- baseline snapshot ${siteId}`);
-      const pass = await new IntegrityWatcher({ site, transport, baseline: baseline! }).runOnce();
-      console.log(`${siteId}: ${pass.filesChecked} files checked`);
-      if (!pass.events.length) console.log(`${C.green}ok${C.reset} nothing differs from the baseline`);
-      for (const e of pass.events) {
-        console.log(`  ${e.severity.padEnd(8)} ${e.type}  ${e.summary}`);
+      if (cmd === "integrity") {
+        needFiles();
+        const transport = await LocalFsTransport.open((site.transport as { root: string }).root);
+        const baseline = await store.load(siteId);
+        if (!baseline) fail(`no file baseline for '${siteId}'. Run: ${hint}`);
+        const pass = await new IntegrityWatcher({ site, transport, baseline: baseline! }).runOnce();
+        console.log(`${siteId}: ${pass.filesChecked} files checked`);
+        if (!pass.events.length) console.log(`${C.green}ok${C.reset} nothing differs from the baseline`);
+        for (const e of pass.events) console.log(`  ${e.severity.padEnd(8)} ${e.type}  ${e.summary}`);
+        if (pass.unreadable.length) console.log(`${C.yellow}${pass.unreadable.length} path(s) could not be read, e.g. ${pass.unreadable[0]}${C.reset}`);
+        if (pass.events.length) process.exitCode = 2;
+        return;
       }
-      if (pass.unreadable.length) console.log(`${C.yellow}${pass.unreadable.length} path(s) could not be read, e.g. ${pass.unreadable[0]}${C.reset}`);
-      if (pass.events.length) process.exitCode = 2;
+
+      // page check
+      const baselines = new Map<string, LoadedPageBaseline>();
+      for (const p of site.pages) {
+        const b = await pageStore.load(siteId, p);
+        if (b) baselines.set(p, b);
+      }
+      if (!baselines.size) fail(`no page baseline for '${siteId}'. Run: ${hint}`);
+      fetcher = await launchBrowser();
+      const res = await new PageWatcher({ site, fetcher, baselines }).runOnce();
+      console.log(`${siteId}: ${res.pagesChecked} page(s) checked`);
+      if (!res.events.length && !res.failed.length) console.log(`${C.green}ok${C.reset} nothing differs from the baseline`);
+      for (const e of res.events) console.log(`  ${e.severity.padEnd(8)} ${e.type}  ${e.summary}`);
+      for (const f of res.failed) console.log(`${C.yellow}could not load ${f.path}: ${f.error}${C.reset}`);
+      if (res.events.length) process.exitCode = 2;
+      else if (res.failed.length) process.exitCode = 1;
       return;
     } catch (e) {
       if (e instanceof ConfigError) fail(e.problems);
-      if (e instanceof BaselineError || e instanceof TransportError) fail(e.message);
+      if (e instanceof BaselineError || e instanceof TransportError || e instanceof BrowserUnavailableError) fail(e.message);
       throw e;
+    } finally {
+      await fetcher?.close();
     }
   }
 
@@ -195,21 +259,19 @@ async function main() {
     });
     orchestrator.start();
 
-    const workers = await prepareIntegrityWorkers({
-      sites, queue, journal, store: new BaselineStore(paths.dataDir, paths.journalKey),
-      log: (m) => console.log(`${C.grey}${m}${C.reset}`),
-      warn: (m) => console.error(`${C.yellow}${m}${C.reset}`),
-    });
+    const log = (m: string) => console.log(`${C.grey}${m}${C.reset}`);
+    const warn = (m: string) => console.error(`${C.yellow}${m}${C.reset}`);
+    const integrityWorkers = await prepareIntegrityWorkers({ sites, queue, journal, store: new BaselineStore(paths.dataDir, paths.journalKey), log, warn });
+    const pageWorkers = await preparePageWorkers({ sites, queue, journal, store: new PageBaselineStore(paths.dataDir, paths.journalKey), log, warn });
+    const workers = combineWorkers([integrityWorkers, pageWorkers]);
 
     console.log(`${C.green}ready${C.reset} ${sites.size} site(s), journal ${journalFile} (head seq ${journal.head().seq})`);
-    console.log(
-      workers.watching.length
-        ? `Integrity watcher on: ${workers.watching.join(", ")}`
-        : `${C.grey}No site is being watched yet. A site needs a local-fs transport and a baseline (baseline snapshot <site-id>).${C.reset}`,
-    );
+    if (integrityWorkers.watching.length) console.log(`Integrity watcher on: ${integrityWorkers.watching.join(", ")}`);
+    if (pageWorkers.watching.length) console.log(`Page watcher on: ${pageWorkers.watching.join(", ")}`);
+    if (!workers.watching.length) console.log(`${C.grey}No site is being watched yet. A site needs a baseline (baseline snapshot <site-id>).${C.reset}`);
 
     const shutdown = async () => {
-      workers.stop();
+      await workers.stop();
       orchestrator.stop();
       await queue.close();
       await journal.close();

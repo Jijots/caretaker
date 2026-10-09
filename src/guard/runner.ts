@@ -32,7 +32,22 @@ export interface StartedWorkers {
   /** One immediate pass for every watched site, then resolves. */
   passOnce(): Promise<void>;
   start(): void;
-  stop(): void;
+  stop(): void | Promise<void>;
+}
+
+/** Several worker groups, started and stopped together. */
+export function combineWorkers(groups: StartedWorkers[]): StartedWorkers {
+  return {
+    watching: [...new Set(groups.flatMap((g) => g.watching))],
+    skipped: groups.flatMap((g) => g.skipped),
+    passOnce: async () => {
+      for (const g of groups) await g.passOnce();
+    },
+    start: () => groups.forEach((g) => g.start()),
+    stop: async () => {
+      for (const g of groups) await g.stop();
+    },
+  };
 }
 
 export async function prepareIntegrityWorkers(o: RunnerOptions): Promise<StartedWorkers> {

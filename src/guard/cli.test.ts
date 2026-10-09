@@ -167,7 +167,7 @@ test("end to end: snapshot, deface, detect, correlate, and journal it, without t
     assert.match(strip(before.out), /No site is being watched yet/);
     assert.match(strip(before.out), /acme-a: integrity watcher not started: no baseline yet/);
 
-    const snap = guard(["baseline", "snapshot", "acme-a", "--note", "fresh deploy"], env);
+    const snap = guard(["baseline", "snapshot", "acme-a", "--note", "fresh deploy", "--files"], env);
     assert.equal(snap.code, 0, snap.out);
     assert.match(strip(snap.out), /2 files \(2 stored for restore, 0 hash only\)/);
     assert.match(strip(snap.out), /already defaced or backdoored, that is now "normal"/);
@@ -212,7 +212,7 @@ test("a tampered baseline stops that site being watched and says why, instead of
       id: "acme-a", name: "A", baseUrl: "https://a.example", platform: "static", transport: { type: "local-fs", root },
     }));
     const env = { GUARD_SITES_DIR: sites, GUARD_DATA_DIR: data };
-    assert.equal(guard(["baseline", "snapshot", "acme-a"], env).code, 0);
+    assert.equal(guard(["baseline", "snapshot", "acme-a", "--files"], env).code, 0);
     const mf = path.join(data, "baselines", "acme-a", "manifest.json");
     const m = JSON.parse(await fs.readFile(mf, "utf8"));
     m.body.files["index.php"].sha256 = "b".repeat(64);
@@ -238,7 +238,7 @@ test("baseline and integrity refuse a site that cannot be read, and an unknown s
       id: "acme-w", name: "W", baseUrl: "https://w.example", platform: "wix", transport: { type: "none" },
     }));
     const env = { GUARD_SITES_DIR: sites, GUARD_DATA_DIR: path.join(dir, "data") };
-    const none = guard(["baseline", "snapshot", "acme-w"], env);
+    const none = guard(["baseline", "snapshot", "acme-w", "--files"], env);
     assert.equal(none.code, 1);
     assert.match(strip(none.out), /transport 'none', which cannot be read/);
     const unknown = guard(["integrity", "check", "nope"], env);

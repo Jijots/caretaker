@@ -15,17 +15,19 @@ Delete the folder and the scanner is unchanged.
 |---|---|---|
 | 1 | Event contract, queue, orchestrator, policy, per-site config, hash-chained journal | **Done** |
 | 2 | Integrity watcher and baseline tooling, local filesystem transport | **Done** |
-| 3 | Page watcher (headless Chromium, DOM and screenshot diff) | Planned |
+| 3 | Page watcher (headless Chromium, DOM and screenshot diff) | **Done** |
 | 4 | Traffic and log watcher | Planned |
 | 5 | Responder (dry-run, then live), git restore adapter, approval flow | Planned |
 | 6 | Scanner (Nuclei adapter first, ZAP behind the same interface) | Planned |
 | 7 | Reporter, owner notifications (Telegram first) | Planned |
 | 8 | Incident history views, if there is a UI to put them in | Planned |
 
-Phases 1 and 2 read and record. **Nothing in this module changes a monitored
-site yet.** The Integrity watcher is the only worker so far, so file changes,
-new and removed files, and executables in upload directories are detected.
-Pages, traffic and scanning arrive in later phases.
+Phases 1 to 3 read and record. **Nothing in this module changes a monitored
+site yet.** Two workers exist. The Integrity watcher sees file changes, new and
+removed files, and executables in upload directories. The Page watcher loads
+the site in a real browser and sees what visitors see: replaced text, defacement
+phrases, injected frames and scripts, redirects. Traffic and scanning arrive in
+later phases.
 
 ## This changes what the repo claims
 
@@ -83,11 +85,11 @@ flowchart LR
 
   classDef built fill:#dff5e1,stroke:#2e7d32,color:#111;
   classDef planned fill:#f3f3f3,stroke:#888,stroke-dasharray: 4 3,color:#333;
-  class Q,J,O,PO,D built;
-  class S,I,P,T,R,RP,OW,TR planned;
+  class Q,J,O,PO,D,I,P built;
+  class S,T,R,RP,OW,TR planned;
 ```
 
-Solid green is built (Phases 1 and 2). Dashed grey is planned.
+Solid green is built (Phases 1 to 3). Dashed grey is planned.
 
 ## Guardrails
 
@@ -262,6 +264,12 @@ are in `src/guard/examples/`.
 | `integrity.intervalSeconds` | 30 to 86400, default 300 |
 | `integrity.fullRehashEvery` | every Nth pass rehashes every file instead of trusting size, mtime and ctime. Default 12 |
 | `integrity.maxFiles`, `maxStoreBytes` | file-count ceiling (a larger site fails loudly rather than being half watched), and the size above which a file is baselined by hash only and so cannot be restored. Defaults 100000 and 10 MB |
+| `pages` | plain paths on the site: must start with `/`, and `//host`, backslashes, spaces and control characters are refused, because a path that parses as another host would send the browser away from the site |
+| `page.intervalSeconds` | 60 to 86400, default 600 |
+| `page.domChangeThreshold` | share of text blocks changed that raises `page.dom_changed`. 0.05 to 1, default 0.15 |
+| `page.visualDiffThreshold` | share of pixels changed that raises `page.visual_diff`. 0.01 to 1, default 0.05. Raised automatically above 3 times the noise measured at snapshot time |
+| `page.extraSignals` | phrases (case-insensitive, literal) that mean defacement on this site, such as a group's name. Counted as strong |
+| `page.allowedOrigins` | origins such as `https://cdn.example.com` that may load scripts, frames or meta-refresh targets even though the baseline never saw them |
 
 `SiteTransport` is read-only by type: watchers are only ever handed it, so they
 cannot change a site by mistake. Writing (restore, quarantine, maintenance
@@ -278,7 +286,7 @@ Guard-wide settings come from the environment:
 ## The Integrity watcher and baselines
 
 ```bash
-npm run caretaker -- baseline snapshot acme-clinic --note "fresh deploy"
+npm run caretaker -- baseline snapshot acme-clinic --files --note "fresh deploy"
 npm run caretaker -- integrity check acme-clinic     # one pass, printed, nothing queued
 npm run caretaker -- run                             # watches every site that has a baseline
 ```
@@ -333,6 +341,76 @@ against the real site. A path that is excluded by mistake is a blind spot.
   and on screen. Watching against a baseline that cannot be trusted would
   report nonsense or nothing.
 
+## The Page watcher
+
+```bash
+npx playwright install chromium                      # once. Chromium only, about 120 MB
+npm run caretaker -- baseline snapshot acme-clinic   # files (local-fs) and pages
+npm run caretaker -- page check acme-clinic          # one pass, printed, nothing queued
+npm run caretaker -- run                             # watches every site that has a baseline
+```
+
+It loads each URL in `pages` (always under the site's own `baseUrl`) in headless
+Chromium at 1280 px wide, and compares what a visitor would see with that page's
+baseline. A site on Wix or any host Caretaker cannot read files from is covered
+by this watcher alone.
+
+**Snapshots load each page twice**, a few seconds apart. Text that differs between
+the two loads (a clock, a visitor counter, a CSRF token) is recorded as
+*volatile* and left out of later text comparisons. The pixel difference between
+the two screenshots becomes a noise floor the visual threshold has to clear.
+Both are printed, so what was ignored is visible, and `pageRegions` is still the
+right fix for something that genuinely moves: a whitelisted region is skipped in
+the text comparison and made invisible (layout kept) in the screenshot.
+
+**What it emits**
+
+| Event | When | Severity, confidence |
+|---|---|---|
+| `page.defacement_signal` | a defacement phrase that was not on the page at baseline time | strong phrase: critical 0.97. Weak phrase: medium 0.6 |
+| `page.defacement_signal` | the page ends on a different origin than the baseline, or has a `<meta refresh>` to another origin | high 0.7 |
+| `page.defacement_signal` | the dominant writing system changed (say Latin to Cyrillic) | high 0.7 |
+| `page.external_script_added` | a script, or a URL inside an inline script, points at an origin the baseline never saw | high 0.75 |
+| `page.iframe_injected` | a frame appeared that is hidden (`display:none`, zero size, off screen), or comes from an unfamiliar origin | hidden: high 0.85. Visible third party: medium 0.6 |
+| `page.dom_changed` | the share of text blocks changed (added plus removed, over both) reaches `domChangeThreshold` | medium, or high from 50%. 0.4 to 0.9 by how much changed |
+| `page.visual_diff` | the share of changed pixels reaches the threshold | medium, high from 30%. 0.45 to 0.75, the weakest evidence because photos and carousels move pixels |
+
+Strong phrases are things like `hacked by`, `defaced by`, `this site has been
+hacked`, `pwned by` and `greetz to`. Weak ones (`owned by`, `pwned`, `was here`,
+`cyber army`) turn up in innocent copy and only count as a hint. The list is
+deliberately narrow: `greetings to our patients` and `your site is compromised`
+(a security vendor's marketing line) are not matches. A phrase already on the
+page at snapshot time is ignored, and the snapshot warns about it.
+
+A defacement phrase is not deploy-explainable, so a deploy window never
+explains it away, and one strong phrase on its own is enough for the
+orchestrator to classify the incident `confirmed_defacement`.
+
+**The browser is treated as hostile territory**
+
+- A fresh context per page load: no cookies, storage or cache carried over.
+- No downloads, no permissions, service workers blocked, dialogs dismissed,
+  popups closed, 30 second navigation limit, 60 second limit on the whole load.
+- **Requests to internal addresses are aborted**: localhost, `.local` and
+  `.internal` names, private, link-local (cloud metadata), carrier-grade NAT and
+  multicast IPv4 ranges, and the IPv6 equivalents including IPv4-mapped forms.
+  A request is allowed only to the site's own host and port, or to a public
+  host. Without this, a defaced page could use the machine running Caretaker to
+  probe its network. The test suite serves a page that tries to reach a second
+  local server and asserts that server saw nothing.
+- Everything read from the page is bounded (5000 text blocks, 300 characters
+  each, 100 frames, 200 inline-script URLs) and recorded as data. Snippets in
+  events are cut to 120 characters with control characters removed.
+- A page that cannot be loaded is reported as a failed load, never as an event,
+  and it does not make an earlier finding look new again.
+
+**Behaviour shared with the Integrity watcher:** a difference is reported once,
+again if it changes, and forgotten when the page matches again. A baseline that
+fails its digest check, or a screenshot that does not match its recorded hash,
+stops that site being watched and the reason goes in the journal
+(`worker_unavailable`). If Chromium cannot start, the Page watcher is off for
+every site and the Integrity watcher carries on.
+
 ## The journal
 
 Append-only JSONL, one entry per line: `seq`, `ts`, `kind`, `prev`, `hash`,
@@ -361,9 +439,10 @@ npm run caretaker -- validate src/guard/examples/acme-clinic.site.json
 npm run caretaker -- validate --all
 npm run caretaker -- journal verify [--file F] [--expected-head HASH]
 npm run caretaker -- journal head [--file F]
-npm run caretaker -- baseline snapshot <site-id> [--note TEXT]
+npm run caretaker -- baseline snapshot <site-id> [--files | --pages] [--note TEXT]
 npm run caretaker -- baseline show <site-id>
-npm run caretaker -- integrity check <site-id>     # exit 2 if anything differs
+npm run caretaker -- integrity check <site-id>     # files. Exit 2 if anything differs
+npm run caretaker -- page check <site-id>          # rendered pages. Exit 2 if anything differs, 1 if a page would not load
 npm run caretaker -- run [--once]
 npm test
 ```
@@ -382,6 +461,31 @@ npm test
   every time. Checking against a vendor's published checksums (WordPress.org
   publishes them for core) or a git commit is a stronger source and is not built
   yet; the manifest records its `source` so one can be added.
+- **A lone text signal can reach `confirmed_defacement`.** One strong phrase is
+  enough for the orchestrator, and when no file changed the proposed containment
+  is `swap_maintenance_page`. With a live responder, outside a deploy window, that
+  could be taken automatically for a page that merely quotes "hacked by" in a new
+  article. The responder is off by default and dry-run until a site says otherwise,
+  and nothing here executes actions yet. Whether a page-only signal may ever
+  trigger an automatic action is a decision for Phase 5, before any responder
+  exists.
+- **The request guard judges names and addresses, not what they resolve to.** A
+  public hostname that resolves to a private address (DNS rebinding) is not caught.
+  Run Caretaker on a machine that cannot reach anything the page should not.
+- **Inline scripts are checked for the origins they mention, nothing more.** An
+  injected inline script that loads nothing external (a redirect written as
+  `location=...` to a relative path, an obfuscated payload) is not seen as such.
+  It is seen only if it changes visible text, frames or the screenshot.
+- **Shadow DOM and content inside cross-origin frames are not read.** The frame
+  itself is, which is why a new frame is reported.
+- **Text is compared as a set of blocks.** A page whose blocks are only reordered
+  looks unchanged to the text comparison; the screenshot may catch it.
+- **A page behind a login, or one that varies by visitor (geo, A/B tests,
+  personalisation), will be noisy.** The twice-loaded snapshot absorbs variation
+  between two loads, not between two visitors. Watch the public version.
+- **Screenshots depend on the browser build.** After upgrading Playwright, take a
+  new page baseline; fonts and anti-aliasing can shift enough to trip the visual
+  threshold.
 - **Only the local filesystem transport exists.** A site on shared hosting needs
   its web root reachable from where Caretaker runs (a mount, or an rsync mirror
   of the host). Reading over SFTP or FTP is not implemented. Git comes in Phase 5.

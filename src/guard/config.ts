@@ -146,6 +146,38 @@ export const IntegrityRules = z
   .strict();
 export type IntegrityRules = z.infer<typeof IntegrityRules>;
 
+const PagePath = z
+  .string()
+  .max(500)
+  .refine((p) => p.startsWith("/"), "a path starting with /")
+  // "//host/x" and "/\host/x" are read by URL parsers as another host, which would point the browser away from the site.
+  .refine((p) => !p.startsWith("//") && !p.includes("\\") && !/[\s\u0000-\u001f\u007f]/.test(p), "a plain path: no //, backslash, spaces or control characters");
+
+const Origin = z.string().max(300).refine((o) => {
+  try {
+    const u = new URL(o);
+    return /^https?:$/.test(u.protocol) && u.origin === o;
+  } catch {
+    return false;
+  }
+}, "an origin such as https://cdn.example.com, with no path");
+
+/** What the Page watcher looks at. Thresholds are the share of a page that may differ before it speaks up. */
+export const PageRules = z
+  .object({
+    intervalSeconds: z.number().int().min(60).max(86_400).default(600),
+    /** Share of text blocks changed (added plus removed, over both) that raises page.dom_changed. */
+    domChangeThreshold: z.number().min(0.05).max(1).default(0.15),
+    /** Share of pixels changed that raises page.visual_diff. */
+    visualDiffThreshold: z.number().min(0.01).max(1).default(0.05),
+    /** Extra phrases, matched case-insensitively, that mean defacement on THIS site (a group name, a slogan). */
+    extraSignals: z.array(z.string().min(3).max(100)).max(50).default([]),
+    /** Origins that may load scripts or frames even though the baseline never saw them. */
+    allowedOrigins: z.array(Origin).max(50).default([]),
+  })
+  .strict();
+export type PageRules = z.infer<typeof PageRules>;
+
 export const SITE_PLATFORMS = ["wordpress", "nextjs", "laravel", "codeigniter", "wix", "static", "other"] as const;
 
 export const SiteConfig = z
@@ -176,12 +208,13 @@ export const SiteConfig = z
         }
       }, "not a valid IANA time zone"),
     transport: TransportConfig,
-    pages: z.array(z.string().startsWith("/").max(500)).min(1).max(50).default(["/"]),
+    pages: z.array(PagePath).min(1).max(50).default(["/"]),
     deployWindows: z.array(DeployWindow).max(20).default([]),
     pageRegions: z.array(PageRegion).max(100).default([]),
     owner: z.object({ telegramChatIdEnv: EnvName.optional() }).strict().default({}),
     responder: Responder.default({}),
     integrity: IntegrityRules.default({}),
+    page: PageRules.default({}),
   })
   .strict()
   .superRefine((s, ctx) => {
@@ -335,4 +368,9 @@ export function effectiveIntegrityRules(site: SiteConfig): EffectiveIntegrityRul
     exclude: uniq([...ALWAYS_EXCLUDE, ...d.exclude, ...r.exclude]),
     uploadDirs: uniq([...d.uploadDirs, ...r.uploadDirs]),
   };
+}
+
+/** CSS selectors to leave out of a page's comparison: the ones for this page plus the ones for every page. */
+export function effectivePageRegions(site: SiteConfig, pagePath: string): string[] {
+  return [...new Set(site.pageRegions.filter((r) => r.page === "*" || r.page === pagePath).map((r) => r.selector))];
 }

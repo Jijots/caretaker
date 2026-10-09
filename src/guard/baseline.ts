@@ -64,12 +64,15 @@ export type BaselineBody = z.infer<typeof Body>;
 
 export class BaselineError extends Error {}
 
-function digestOf(body: BaselineBody, key?: Buffer): string {
-  const data = canonicalize(body);
+/** SHA-256 of the canonical JSON, or HMAC-SHA-256 when a key is given. Shared by every baseline kind. */
+export function digestJson(value: unknown, key?: Buffer): string {
+  const data = canonicalize(value);
   return key ? createHmac("sha256", key).update(data).digest("hex") : createHash("sha256").update(data).digest("hex");
 }
 
-async function atomicWrite(file: string, data: string | Buffer): Promise<void> {
+const digestOf = (body: BaselineBody, key?: Buffer): string => digestJson(body, key);
+
+export async function atomicWrite(file: string, data: string | Buffer): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
   try {
