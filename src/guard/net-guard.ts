@@ -7,11 +7,14 @@
  * Caretaker. So a request is allowed only if it goes to the monitored site's
  * own host:port, or to a host that is not an internal address.
  *
- * Limit, stated plainly: this judges the name or address in the URL. A public
- * hostname that RESOLVES to a private address (DNS rebinding) is not caught.
+ * requestAllowed() judges the address written in the URL. createRequestGuard()
+ * also resolves names, so a public-looking hostname that points at a private
+ * address is refused. Limit, stated plainly: DNS rebinding (an answer that
+ * changes between our lookup and the browser's own) is narrowed, not closed.
  * Run Caretaker on a network where the browser cannot reach anything sensitive.
  */
 
+import { promises as dns } from "node:dns";
 import { isIP } from "node:net";
 
 const ALLOWED_SCHEMES = new Set(["http:", "https:", "data:", "blob:", "about:"]);
@@ -65,4 +68,48 @@ export function requestAllowed(requestUrl: string, siteHost: string): boolean {
   if (u.protocol === "data:" || u.protocol === "blob:" || u.protocol === "about:") return true;
   if (u.host.toLowerCase() === siteHost.toLowerCase()) return true;
   return !isInternalHost(u.hostname);
+}
+
+/* ------------------------------------------------------- resolved names */
+
+export type Resolver = (hostname: string) => Promise<string[]>;
+
+const defaultResolver: Resolver = async (hostname) => (await dns.lookup(hostname, { all: true, verbatim: true })).map((a) => a.address);
+
+/**
+ * requestAllowed() plus a lookup of the name. "evil.example" with an A record of
+ * 127.0.0.1 looks public to a string check and is not. Every address the name
+ * resolves to must be public, and a name that will not resolve is refused.
+ *
+ * This narrows DNS rebinding and does not close it: the browser resolves the
+ * name again itself, and an attacker who answers differently the second time
+ * (a very short TTL) can still get through. Results are cached briefly so a page
+ * with fifty images from one host costs one lookup.
+ */
+export function createRequestGuard(opts: { resolve?: Resolver; ttlMs?: number; now?: () => number } = {}) {
+  const resolve = opts.resolve ?? defaultResolver;
+  const ttl = opts.ttlMs ?? 30_000;
+  const now = opts.now ?? Date.now;
+  const cache = new Map<string, { ok: boolean; until: number }>();
+
+  return async function allowed(requestUrl: string, siteHost: string): Promise<boolean> {
+    if (!requestAllowed(requestUrl, siteHost)) return false;
+    const u = new URL(requestUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return true;
+    if (u.host.toLowerCase() === siteHost.toLowerCase()) return true;
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (isIP(host)) return true; // a literal was already judged above
+    const hit = cache.get(host);
+    if (hit && hit.until > now()) return hit.ok;
+    let ok: boolean;
+    try {
+      const addrs = await resolve(host);
+      ok = addrs.length > 0 && addrs.every((a) => !isInternalHost(a));
+    } catch {
+      ok = false;
+    }
+    if (cache.size > 2000) cache.clear();
+    cache.set(host, { ok, until: now() + ttl });
+    return ok;
+  };
 }

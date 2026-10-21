@@ -461,17 +461,18 @@ npm test
   every time. Checking against a vendor's published checksums (WordPress.org
   publishes them for core) or a git commit is a stronger source and is not built
   yet; the manifest records its `source` so one can be added.
-- **A lone text signal can reach `confirmed_defacement`.** One strong phrase is
-  enough for the orchestrator, and when no file changed the proposed containment
-  is `swap_maintenance_page`. With a live responder, outside a deploy window, that
-  could be taken automatically for a page that merely quotes "hacked by" in a new
-  article. The responder is off by default and dry-run until a site says otherwise,
-  and nothing here executes actions yet. Whether a page-only signal may ever
-  trigger an automatic action is a decision for Phase 5, before any responder
-  exists.
-- **The request guard judges names and addresses, not what they resolve to.** A
-  public hostname that resolves to a private address (DNS rebinding) is not caught.
-  Run Caretaker on a machine that cannot reach anything the page should not.
+- **A lone text signal can still classify as `confirmed_defacement`, but it cannot
+  act.** One strong phrase is enough for the orchestrator to confirm and notify.
+  The policy then requires approval for every file-changing action when the only
+  evidence is what the pages show, so a page that quotes "hacked by" in a new
+  article cannot take a site offline. A changed file or hostile traffic alongside
+  it lifts that rule. The cost: a real defacement that changes no file Caretaker
+  can see (a CMS-stored page, a Wix site) is notified and waits for a person.
+- **The request guard narrows DNS rebinding and does not close it.** Names are
+  resolved and every answer must be public, so a hostname pointing at 127.0.0.1 is
+  refused. The browser resolves the name again itself, so an attacker who answers
+  differently the second time (a very short TTL) can still get through. Run
+  Caretaker on a machine that cannot reach anything the page should not.
 - **Inline scripts are checked for the origins they mention, nothing more.** An
   injected inline script that loads nothing external (a redirect written as
   `location=...` to a relative path, an obfuscated payload) is not seen as such.
@@ -508,7 +509,6 @@ npm test
   binds what an approval covers; it does not authenticate who issued an action.
   When the responder runs as its own process (Phase 5), actions it receives must
   be HMAC-authenticated, because the journal alone is not a trust boundary.
-- **IPv6 allowlist ranges** are matched exactly, not by prefix. IPv4 CIDR works.
 - **Live Ctrl+C shutdown** is implemented but only the `run --once` shutdown
   path is covered by tests.
 - **Chain anchoring is manual** for now.

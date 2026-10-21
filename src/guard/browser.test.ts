@@ -116,3 +116,23 @@ test("a page that cannot be loaded raises an error, never an event", async (t) =
     await fetcher.close();
   }
 });
+
+test("a server that accepts the connection and never answers is abandoned on the time limit", async (t) => {
+  let fetcher: PageFetcher;
+  try {
+    fetcher = await launchBrowser({ navTimeoutMs: 1500, totalTimeoutMs: 6000 });
+  } catch (e) {
+    if (e instanceof BrowserUnavailableError) return t.skip(e.message);
+    throw e;
+  }
+  const silent = await listen(() => undefined); // takes the request, never replies
+  const started = Date.now();
+  try {
+    await assert.rejects(() => fetcher.fetch(`${silent.origin}/`, { hideSelectors: [], screenshot: false }), /Timeout|timed out/i);
+    assert.ok(Date.now() - started < 10_000, `gave up in ${Date.now() - started} ms`);
+  } finally {
+    await fetcher.close();
+    silent.server.closeAllConnections?.();
+    silent.server.close();
+  }
+});

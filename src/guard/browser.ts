@@ -13,15 +13,15 @@
  * machine that is not trusted with anything the page should not reach.
  */
 
-import { requestAllowed } from "./net-guard.js";
+import { createRequestGuard, type Resolver } from "./net-guard.js";
 import type { PageFetcher, RawPage } from "./page-digest.js";
 
 export class BrowserUnavailableError extends Error {}
 
 export const VIEWPORT = { width: 1280, height: 800 } as const;
 const MAX_SHOT_HEIGHT = 3000;
-const NAV_TIMEOUT_MS = 30_000;
-const TOTAL_TIMEOUT_MS = 60_000;
+const DEFAULT_NAV_TIMEOUT_MS = 30_000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 60_000;
 
 /**
  * Runs inside the page. A string on purpose: the TypeScript transform can add
@@ -99,7 +99,17 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   ]).finally(() => clearTimeout(t!));
 }
 
-export async function launchBrowser(): Promise<PageFetcher> {
+export interface BrowserOptions {
+  navTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  /** Replaceable for tests. */
+  resolve?: Resolver;
+}
+
+export async function launchBrowser(opts: BrowserOptions = {}): Promise<PageFetcher> {
+  const navTimeout = opts.navTimeoutMs ?? DEFAULT_NAV_TIMEOUT_MS;
+  const totalTimeout = opts.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
+  const guard = createRequestGuard({ resolve: opts.resolve });
   let chromium: any;
   try {
     ({ chromium } = await import("playwright"));
@@ -128,7 +138,7 @@ export async function launchBrowser(): Promise<PageFetcher> {
       try {
         return await withTimeout(
           (async (): Promise<RawPage> => {
-            await context.route("**/*", (route: any) => (requestAllowed(route.request().url(), siteHost) ? route.continue() : route.abort("blockedbyclient")));
+            await context.route("**/*", async (route: any) => ((await guard(route.request().url(), siteHost)) ? route.continue() : route.abort("blockedbyclient")));
             let main: any = null;
             context.on("page", (p: any) => {
               // The first page event is ours, fired while newPage() is still running. Any later page is a popup.
@@ -138,7 +148,7 @@ export async function launchBrowser(): Promise<PageFetcher> {
             main = page;
             page.on("dialog", (d: any) => void d.dismiss().catch(() => undefined));
 
-            const resp = await page.goto(url, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+            const resp = await page.goto(url, { waitUntil: "load", timeout: navTimeout });
             await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => undefined);
             await page.waitForTimeout(300);
 
@@ -173,7 +183,7 @@ export async function launchBrowser(): Promise<PageFetcher> {
               warnings: data.warnings,
             };
           })(),
-          TOTAL_TIMEOUT_MS,
+          totalTimeout,
           `loading ${url}`,
         );
       } finally {

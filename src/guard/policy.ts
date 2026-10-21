@@ -17,6 +17,7 @@
  * "auto" in a dry-run site only records what it would have done.
  */
 
+import { ipMatches } from "./ip.js";
 import {
   Action, isDestructive, makeAction,
   type ActionKind, type Classification, type Decision, type DecisionMode, type Incident,
@@ -54,32 +55,6 @@ function allowed(kind: ActionKind, caps: Capabilities): boolean {
   }
 }
 
-/* ------------------------------------------------------------ IP matching */
-
-function ipv4ToInt(ip: string): number | null {
-  const p = ip.split(".");
-  if (p.length !== 4) return null;
-  let n = 0;
-  for (const part of p) {
-    if (!/^\d{1,3}$/.test(part) || Number(part) > 255) return null;
-    n = n * 256 + Number(part);
-  }
-  return n;
-}
-
-/** Exact match for any address, CIDR match for IPv4. IPv6 ranges compare exactly (documented limit). */
-export function ipMatches(ip: string, entry: string): boolean {
-  if (!entry.includes("/")) return ip.toLowerCase() === entry.toLowerCase();
-  const [base, bits] = entry.split("/");
-  const a = ipv4ToInt(ip);
-  const b = ipv4ToInt(base);
-  if (a === null || b === null) return false;
-  const len = Number(bits);
-  if (len === 0) return true;
-  const mask = len === 32 ? 0xffffffff : (~((1 << (32 - len)) - 1)) >>> 0;
-  return ((a & mask) >>> 0) === ((b & mask) >>> 0);
-}
-
 /* --------------------------------------------------------------- decision */
 
 export function summarizeMode(actions: Action[]): DecisionMode {
@@ -99,6 +74,8 @@ function build(incident: Incident, actions: Action[], reasons: string[], modeOve
     reasons: reasons.map((r) => r.slice(0, 300)).slice(0, 30),
   });
 }
+
+export { ipMatches };
 
 export function decide(input: PolicyInput): Decision {
   const { incident, site, deploy } = input;
@@ -157,6 +134,11 @@ export function decide(input: PolicyInput): Decision {
     }
     if (deploy === "match") why.push("the change matches a known deploy");
     else if (deploy === "unknown") why.push("a legitimate deploy cannot be ruled out");
+    // Page text is the easiest evidence to produce by accident: a new article that quotes "hacked by"
+    // looks the same as the real thing to a phrase matcher. Alone, it may notify but never act.
+    if (p.kind !== "block_ip" && incident.workers.length > 0 && incident.workers.every((w) => w === "page")) {
+      why.push("the only evidence is what the pages show. Another kind of evidence (a changed file, hostile traffic) is needed before anything is changed automatically");
+    }
     if (p.kind === "restore_files" && breakerTripped) {
       why.push(`restore loop breaker: ${input.recentRestores} restores in ${r.restoreWindowMinutes} minutes. Restoring again will not close the hole, so a person must look`);
     }

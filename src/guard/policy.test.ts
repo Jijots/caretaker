@@ -163,7 +163,8 @@ test("ipMatches: exact addresses and IPv4 CIDR ranges", () => {
   assert.equal(ipMatches("128.0.0.1", "128.0.0.0/1"), true);
   assert.equal(ipMatches("127.0.0.1", "128.0.0.0/1"), false);
   assert.equal(ipMatches("2001:DB8::1", "2001:db8::1"), true, "IPv6 compares case-insensitively");
-  assert.equal(ipMatches("2001:db8::2", "2001:db8::/32"), false, "IPv6 ranges are an exact-match limit for now");
+  assert.equal(ipMatches("2001:db8::2", "2001:db8::/32"), true, "IPv6 ranges match by prefix");
+  assert.equal(ipMatches("2001:db9::2", "2001:db8::/32"), false);
 });
 
 test("summarizeMode reflects the most cautious destructive action", () => {
@@ -249,4 +250,18 @@ test("LLM: doubting a legitimate classification raises it to suspicious and tell
 test("LLM: it cannot turn a needs-approval decision into an automatic one", () => {
   const { d, i } = scenarios[2][1]();
   for (const [, v] of verdicts) assert.notEqual(applyLlmVerdict(d, i, v).decision.mode, "auto");
+});
+
+test("evidence from page content alone never acts automatically, but still notifies and still proposes", () => {
+  const d = run({ incidentOver: { workers: ["page"], classification: "confirmed_defacement", confidence: 0.99 }, proposed: [{ kind: "swap_maintenance_page", params: {}, reason: "page is defaced" }] });
+  const swap = act(d, "swap_maintenance_page")!;
+  assert.equal(swap.requiresApproval, true);
+  assert.match(swap.reasons.join(" "), /only evidence is what the pages show/);
+  assert.equal(d.mode, "needs_approval");
+  assert.ok(act(d, "notify_owner") && act(d, "preserve_evidence"), "the owner is still told and evidence is still kept");
+});
+
+test("page evidence plus another kind of evidence is eligible", () => {
+  const d = run({ incidentOver: { workers: ["page", "integrity"] }, proposed: [{ kind: "swap_maintenance_page", params: {}, reason: "x" }] });
+  assert.equal(act(d, "swap_maintenance_page")!.requiresApproval, false);
 });

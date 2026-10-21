@@ -420,3 +420,48 @@ test("no page baseline is null, and snapshot warns about a page that is already 
     assert.match(w, /ended on https:\/\/elsewhere\.example/);
   } finally { await r.cleanup(); }
 });
+
+/* ---------------------------------------------------- resolving request guard */
+
+import { createRequestGuard } from "./net-guard.js";
+
+test("a public-looking name that resolves to an internal address is refused", async () => {
+  const answers: Record<string, string[] | Error> = {
+    "evil.example": ["127.0.0.1"],
+    "mixed.example": ["93.184.216.34", "10.0.0.5"],
+    "v6.example": ["fd00::1"],
+    "ok.example": ["93.184.216.34", "2606:2800:220:1::1"],
+    "gone.example": new Error("ENOTFOUND"),
+  };
+  const asked: string[] = [];
+  const guard = createRequestGuard({
+    resolve: async (h) => {
+      asked.push(h);
+      const a = answers[h];
+      if (a instanceof Error) throw a;
+      return a ?? [];
+    },
+  });
+  const site = "acme.example";
+  assert.equal(await guard("https://ok.example/a.js", site), true);
+  assert.equal(await guard("https://evil.example/a.js", site), false, "points at loopback");
+  assert.equal(await guard("https://mixed.example/a.js", site), false, "one internal answer is enough");
+  assert.equal(await guard("https://v6.example/a.js", site), false);
+  assert.equal(await guard("https://gone.example/a.js", site), false, "a name that will not resolve is refused");
+  assert.equal(await guard("https://unlisted.example/a.js", site), false, "no answers at all is refused");
+  assert.equal(await guard("https://acme.example/own.js", site), true, "the site itself is never looked up");
+  assert.equal(await guard("data:text/plain,hi", site), true);
+  assert.equal(await guard("http://127.0.0.1/", site), false, "literals are still judged without a lookup");
+  assert.ok(!asked.includes("acme.example") && !asked.includes("127.0.0.1"));
+});
+
+test("lookups are cached briefly, then asked again", async () => {
+  let now = 1000;
+  let n = 0;
+  const guard = createRequestGuard({ resolve: async () => (n++, ["93.184.216.34"]), ttlMs: 500, now: () => now });
+  for (let i = 0; i < 5; i++) await guard("https://cdn.example/x.js", "acme.example");
+  assert.equal(n, 1);
+  now += 501;
+  await guard("https://cdn.example/x.js", "acme.example");
+  assert.equal(n, 2);
+});
