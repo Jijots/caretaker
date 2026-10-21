@@ -4,12 +4,14 @@ Security tooling for small websites, built for the kind of sites freelancers and
 small agencies actually look after: a WordPress clinic site on cPanel, a Next.js
 shop on Vercel, a Wix page with no server access at all.
 
-This repository holds two tools that share a codebase and nothing else:
+This repository holds two tools that share a codebase and nothing else, plus a write-up of rebuilding
+one of them on an agent platform:
 
 | | What it does | Changes a site? | Start here |
 |---|---|---|---|
 | **Caretaker** (`src/guard/`) | Watches a live site for defacement. Detects changed files, dropped webshells, injected scripts and frames, and replaced page content, then correlates the signals into incidents with a recorded, auditable decision. | Not yet. It reads and records. Restoring files comes in a later phase and is off by default, dry-run first, and needs approval unless several kinds of evidence agree. | [src/guard/README.md](src/guard/README.md) |
 | **security-pass** (`src/`) | A read-only, tool-calling agent that audits a codebase before launch against 34 checks and reports findings for a person to confirm. It also has an ownership-verified active scan mode. | Never. It can only read. | [Below](#security-pass-the-pre-launch-scanner) |
+| **The Paperclip version** (`paperclip/`) | The scanner rebuilt as a team of read-only agents on the [Paperclip](https://github.com/paperclipai/paperclip) platform: a tested lock-down, a script that creates and verifies the team, two real run reports, and what the platform's defaults got wrong. | Never. Agents get exactly three read tools, confined to one folder. | [paperclip/README.md](paperclip/README.md) |
 
 ## Caretaker at a glance
 
