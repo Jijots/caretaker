@@ -161,6 +161,7 @@ One agent run per check, rather than one run for everything. A stubborn check ca
 ### Known limits
 
 - It reads a repository. It cannot see your live database, your hosting config, or your provider dashboards.
+- **Secrets and the API providers.** With `--provider groq`, `openai` or `local`, every tool result is sent to the model on the next turn. So that a secrets audit does not copy the secrets it is hunting, [`src/redact.ts`](src/redact.ts) replaces every value in a real `.env` file and anything shaped like a known credential (OpenAI, Groq, GitHub, AWS, Google, Slack and Telegram tokens, JWTs, private keys) with a label and a length, before the model sees it. File, line and kind are kept, so a finding can still say "a hardcoded key is on line 12". It does not recognise a password made of plain words outside an env file. The default `claude` provider reads files with Claude Code's own tools and is not covered. This was found by pointing a second agent at this repository.
 - Row-level security is checked against migrations and policy files. The live database is the real source of truth.
 - Git history is not searched. Run `git log --all --full-history -- .env` yourself.
 - It has no dependency vulnerability database. Run `npm audit` and `composer audit`.

@@ -8,7 +8,7 @@
     "scan": "tsx src/index.ts",
     "caretaker": "tsx src/guard/cli.ts",
     "guard": "tsx src/guard/cli.ts",
-    "test": "node --import tsx --test \"src/guard/**/*.test.ts\"",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

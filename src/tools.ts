@@ -8,6 +8,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { redactForModel } from "./redact.js";
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", "vendor", "dist", "build", ".next", ".nuxt",
@@ -98,9 +99,10 @@ export async function listFiles(sb: Sandbox, args: { pattern?: string; limit?: n
 export async function readFile(sb: Sandbox, args: { path: string; start?: number; end?: number }) {
   const abs = sb.resolve(args.path);
   const stat = await fs.stat(abs);
+  // Redacted before slicing, and redaction never changes the line count, so line numbers stay true.
+  const text = redactForModel(sb.rel(abs), await fs.readFile(abs, "utf8"));
   if (stat.size > MAX_FILE_BYTES) {
-    const buf = await fs.readFile(abs, "utf8");
-    const lines = buf.split("\n");
+    const lines = text.split("\n");
     return {
       path: args.path,
       truncated: true,
@@ -109,7 +111,7 @@ export async function readFile(sb: Sandbox, args: { path: string; start?: number
       totalLines: lines.length,
     };
   }
-  const lines = (await fs.readFile(abs, "utf8")).split("\n");
+  const lines = text.split("\n");
   const start = Math.max(1, args.start ?? 1);
   const end = Math.min(lines.length, args.end ?? Math.min(lines.length, start + 119));
   return {
@@ -140,9 +142,12 @@ export async function grep(sb: Sandbox, args: { pattern: string; glob?: string; 
       continue;
     }
     const lines = content.split("\n");
+    const shown = redactForModel(rel, content).split("\n"); // same line count as the original
     for (let i = 0; i < lines.length; i++) {
+      // Match the ORIGINAL line so a secret can still be found; show the redacted one.
       if (re.test(lines[i])) {
-        hits.push({ file: rel, line: i + 1, text: lines[i].trim().slice(0, 160) });
+        // Redact first, cut second: cutting first could slice a secret in half and defeat the match.
+        hits.push({ file: rel, line: i + 1, text: shown[i].trim().slice(0, 160) });
         if (hits.length >= MAX_GREP_HITS) {
           return { truncated: true, count: hits.length, hits };
         }
