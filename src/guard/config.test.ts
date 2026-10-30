@@ -108,7 +108,7 @@ test("the shipped example configs all validate", async () => {
     seen.add(s.id);
     assert.equal(s.responder.enabled, false, `${f}: examples must ship with the responder off`);
   }
-  assert.deepEqual([...seen].sort(), ["acme-clinic", "acme-shop", "acme-wix"]);
+  assert.deepEqual([...seen].sort(), ["acme-clinic", "acme-shop", "acme-studio", "acme-wix"]);
 });
 
 test("loadSites: duplicates, bad files and unrelated files", async () => {

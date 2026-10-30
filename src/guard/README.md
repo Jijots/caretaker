@@ -246,7 +246,7 @@ are in `src/guard/examples/`.
 
 | Field | Notes |
 |---|---|
-| `id`, `name`, `baseUrl`, `platform` | `platform`: wordpress, nextjs, laravel, codeigniter, wix, static, other |
+| `id`, `name`, `baseUrl`, `platform` | `platform`: wordpress, nextjs, laravel, codeigniter, django, wix, static, other |
 | `timezone` | IANA zone, default `Asia/Manila`. Deploy windows are evaluated in it |
 | `transport` | `{ "type": "local-fs", "root": "<absolute path>" }`, `{ "type": "git", "remote", "branch", "deployHookEnv" }`, or `{ "type": "none" }` for platforms such as Wix, where only the Page watcher can observe |
 | `pages` | paths the Page watcher loads. Default `["/"]` |
@@ -317,9 +317,22 @@ executable in uploads is not, so a deploy window never explains it away.
 | laravel | `storage/framework/**`, `storage/logs/**`, `bootstrap/cache/**` | `storage/app/public/**`, `public/storage/**`, `public/uploads/**` |
 | codeigniter | `writable/{cache,logs,session,debugbar}/**`, `application/{cache,logs}/**` | `writable/uploads/**`, `public/uploads/**`, `uploads/**` |
 | nextjs | `.next/cache/**`, `node_modules/.cache/**` | `public/uploads/**` |
+| django | `**/__pycache__/**`, `**/*.sqlite3`, `**/*.sqlite3-journal`, `**/*.log`, `logs/**`, `**/venv/**`, `**/.venv/**` | `media/**` |
 
 These are a starting point drawn from each platform's usual layout. Check them
 against the real site. A path that is excluded by mistake is a blind spot.
+
+**Django specifics.** `manage.py`, `settings.py`, `urls.py`, `wsgi.py` and
+`asgi.py` count as entry points wherever they sit, so a change to one is
+critical: they decide what code runs and where requests go. Python files
+(`.py`, `.pyw`, `.pyc`) in an upload directory are executable indicators.
+`staticfiles/` (the output of `collectstatic`) is **watched, not excluded**: it
+only changes when you deploy, and JavaScript injected into served static files
+is a classic attack. Run `baseline snapshot` again after each `collectstatic`.
+The excludes are deliberately narrow: a bare `*.pyc` exclude would also hide
+bytecode dropped into `media/`, and Python 3 only writes bytecode inside
+`__pycache__/`, which is already excluded. A worked example is in
+`examples/acme-django.site.json`.
 
 **Behaviour worth knowing**
 
@@ -499,6 +512,24 @@ npm test
 - **No cross-pass memory of the baseline.** The baseline is loaded when `run`
   starts. After a legitimate deploy, take a new snapshot and restart `run`.
   Anything else would let a defacement redefine normal by itself.
+- **Excluded paths are not examined at all.** A file an attacker drops inside an
+  excluded directory (a framework's cache folder, say) is not seen by the
+  Integrity watcher. Those directories legitimately hold generated code (compiled
+  Blade views, bytecode), so scanning them for executables would only create
+  noise. Keep excludes as narrow as you can, and rely on the Page watcher for
+  what actually reaches visitors.
+- **Restoring Python code does not reload it.** Restoring a changed `.py` file
+  puts the right bytes back, but a running Django process keeps the old code in
+  memory until it is reloaded (gunicorn, uWSGI, mod_wsgi). Caretaker does not
+  restart services, so a restore on a Django site also needs a reload by the
+  owner. This matters when the responder arrives in Phase 5.
+- **Baselines hold copies of every file, including ones with secrets.** A
+  baseline stores the bytes of each watched file under the size limit so a restore
+  has something to copy from. That includes `.env`, `wp-config.php` and a
+  Django `settings.py` with its `SECRET_KEY`. The data directory is meant to sit
+  off the monitored host and out of reach, but treat it like a secrets store. A
+  hash-only mode for such files is a possible later change, at the cost of not
+  being able to restore them.
 - **Executable detection is by name and a 4 KB sniff.** A webshell that is not
   named like a script, does not start with a marker in its first 4 KB, and is
   served through some other route is not caught here.

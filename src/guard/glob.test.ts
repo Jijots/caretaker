@@ -30,3 +30,14 @@ test("a pattern that would match every file is recognised", () => {
   for (const g of ["**", "**/*", "/", "", "**/**"]) assert.equal(isTotalGlob(g), true, JSON.stringify(g));
   for (const g of ["*.log", "cache/**", "**/*.log"]) assert.equal(isTotalGlob(g), false, g);
 });
+
+test("patterns that start with **/ match at the root and at any depth, as Django's defaults rely on", () => {
+  assert.equal(m("__pycache__/x.pyc", "**/__pycache__/**"), true);
+  assert.equal(m("app/__pycache__", "**/__pycache__/**"), true, "the directory itself, so it can be skipped");
+  assert.equal(m("a/b/__pycache__/x.pyc", "**/__pycache__/**"), true);
+  assert.equal(m("app/pycache/x.py", "**/__pycache__/**"), false);
+  assert.equal(m("db.sqlite3", "**/*.sqlite3"), true);
+  assert.equal(m("a/b/c.sqlite3", "**/*.sqlite3"), true);
+  assert.equal(m("a/db.sqlite3.bak", "**/*.sqlite3"), false);
+  assert.equal(m("x/.venv/lib/site.py", "**/.venv/**"), true);
+});

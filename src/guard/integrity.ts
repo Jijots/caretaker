@@ -26,14 +26,15 @@ import type { FileEntry, SiteTransport } from "./transport.js";
 /** Extensions that a web server may execute. Matched on every dot-separated segment, to catch shell.php.jpg. */
 export const EXECUTABLE_EXTENSIONS = new Set([
   "php", "php3", "php4", "php5", "php7", "php8", "phtml", "phar", "pht", "phps", "inc",
-  "asp", "aspx", "ashx", "asmx", "cer", "jsp", "jspx", "jsw", "cgi", "pl", "py", "sh", "bash",
+  "asp", "aspx", "ashx", "asmx", "cer", "jsp", "jspx", "jsw", "cgi", "pl", "py", "pyw", "pyc", "sh", "bash",
 ]);
 
 /** Files that change what the server does with other files, wherever they appear in an upload directory. */
 const SERVER_CONFIG_NAMES = new Set([".htaccess", ".user.ini", "web.config", ".htpasswd"]);
 
 /** Entry points: replacing one is how most defacements happen, so a change here is rated higher. */
-const ENTRY_POINT = /^(index\.(php|html?|js)|\.htaccess|\.user\.ini|wp-config\.php|wp-settings\.php|default\.(php|html?)|home\.(php|html?))$/i;
+// Django's equivalents: the file that wires URLs to code, the settings, and the two server entry points.
+const ENTRY_POINT = /^(index\.(php|html?|js)|\.htaccess|\.user\.ini|wp-config\.php|wp-settings\.php|default\.(php|html?)|home\.(php|html?)|manage\.py|settings\.py|urls\.py|wsgi\.py|asgi\.py)$/i;
 
 const MAX_EVENTS_PER_TYPE = 25;
 const SNIFF_BYTES = 4096;

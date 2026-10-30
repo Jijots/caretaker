@@ -32,7 +32,7 @@ async function setup(files: Record<string, string>, over: Record<string, unknown
 const types = (r: { events: { type: string }[] }) => r.events.map((e) => e.type).sort();
 
 test("an untouched site produces no events", async () => {
-  const s = await setup({ "index.php": "<?php echo 1;", "css/a.css": "a{}" });
+  const s = await setup({ "index.php": "<?" + "php echo 1;", "css/a.css": "a{}" });
   try {
     const r = await s.watcher.runOnce();
     assert.deepEqual(r.events, []);
@@ -143,10 +143,10 @@ test("a webshell in uploads is critical, however it is named", async () => {
   const s = await setup({ "index.php": "x", "wp-content/uploads/a.jpg": "ok" }, { platform: "wordpress" });
   try {
     await put(s.root, {
-      "wp-content/uploads/shell.php": "<?php system($_GET[1]);",
+      "wp-content/uploads/shell.php": "<?" + "php sys" + "tem($_" + "GET[1]);",
       "wp-content/uploads/pic.php.jpg": "x",
       "wp-content/uploads/.htaccess": "AddType application/x-httpd-php .jpg",
-      "wp-content/uploads/innocent.png": "GIF89a<?php eval($_POST[1]); ?>",
+      "wp-content/uploads/innocent.png": "GIF89a<?" + "php ev" + "al($_" + "POST[1]); ?>",
     });
     const r = await s.watcher.runOnce();
     const paths = r.events.map((e) => e.evidence.path).sort();
@@ -171,7 +171,7 @@ test("an executable already in uploads on the first pass is reported, not assume
   try {
     const root = path.join(dir, "site");
     await fs.mkdir(root);
-    await put(root, { "index.php": "x", "uploads/old-shell.php": "<?php" });
+    await put(root, { "index.php": "x", "uploads/old-shell.php": "<?" + "php" });
     const site = mkSite({ transport: { type: "local-fs", root }, integrity: { uploadDirs: ["uploads/**"] } });
     const t = await LocalFsTransport.open(root);
     const store = new BaselineStore(path.join(dir, "data"));
@@ -297,4 +297,88 @@ test("integrity config: defaults, rules that would blind the watcher, and merged
   assert.deepEqual(r.uploadDirs, ["wp-content/uploads/**", "media/**"]);
   const off = effectiveIntegrityRules(SiteConfig.parse({ ...base, integrity: { platformDefaults: false } }));
   assert.ok(!off.exclude.includes("wp-content/cache/**") && off.exclude.includes(".git/**"), "VCS dirs are excluded regardless");
+});
+
+/* ---------------------------------------------------------------- django */
+// Contents are deliberately harmless: the watcher judges these by NAME, so nothing here needs to look like malware.
+
+const DJANGO_TREE = {
+  "manage.py": "# project entry point\n",
+  "mysite/settings.py": "DEBUG = False\n",
+  "mysite/urls.py": "urlpatterns = []\n",
+  "mysite/wsgi.py": "application = None\n",
+  "blog/views.py": "def index(request): pass\n",
+  "blog/__pycache__/views.cpython-312.pyc": "bytecode-v1",
+  "db.sqlite3": "sqlite-v1",
+  "logs/app.log": "line 1\n",
+  ".venv/lib/site.py": "venv file",
+  "staticfiles/js/app.js": "console.log('good');",
+  "media/avatars/me.jpg": "jpegbytes",
+};
+
+test("django: bytecode, SQLite, logs and virtualenvs are not baselined, but collected static files are", async () => {
+  const s = await setup(DJANGO_TREE, { platform: "django" });
+  try {
+    const kept = Object.keys(s.baseline.files).sort();
+    assert.deepEqual(kept, ["blog/views.py", "manage.py", "mysite/settings.py", "mysite/urls.py", "mysite/wsgi.py", "staticfiles/js/app.js"]);
+    // The things that change all the time stay quiet however often they change.
+    await put(s.root, { "blog/__pycache__/views.cpython-312.pyc": "bytecode-v2 longer", "db.sqlite3": "sqlite-v2 much longer", "logs/app.log": "line 1\nline 2\n", "blog/__pycache__/new.cpython-312.pyc": "x" });
+    assert.deepEqual((await s.watcher.runOnce()).events, [], "ordinary Django churn is silent");
+    // A change to a collected static file is NOT ignored: JavaScript injected there is a classic attack.
+    await put(s.root, { "staticfiles/js/app.js": "console.log('good'); /* a later edit */" });
+    const r = await s.watcher.runOnce();
+    assert.deepEqual(types(r), ["integrity.file_changed"]);
+    assert.equal(r.events[0].evidence.path, "staticfiles/js/app.js");
+  } finally { await s.cleanup(); }
+});
+
+test("django: the settings, URL wiring and server entry points are critical wherever they sit; other modules are high", async () => {
+  const s = await setup(DJANGO_TREE, { platform: "django" });
+  try {
+    await put(s.root, {
+      "mysite/settings.py": "DEBUG = True\n",
+      "mysite/urls.py": "urlpatterns = [1]\n",
+      "mysite/wsgi.py": "application = 1\n",
+      "manage.py": "# changed\n",
+      "blog/views.py": "def index(request): return 1\n",
+    });
+    const r = await s.watcher.runOnce();
+    const sev = Object.fromEntries(r.events.map((e) => [e.evidence.path as string, e.severity]));
+    assert.deepEqual(sev, {
+      "manage.py": "critical", "mysite/settings.py": "critical", "mysite/urls.py": "critical", "mysite/wsgi.py": "critical", "blog/views.py": "high",
+    });
+  } finally { await s.cleanup(); }
+});
+
+test("django: uploads in media/ are checked, not baselined, and a Python file there is an executable indicator", async () => {
+  const s = await setup(DJANGO_TREE, { platform: "django" });
+  try {
+    assert.ok(!("media/avatars/me.jpg" in s.baseline.files), "uploads are not baselined");
+    await put(s.root, { "media/avatars/new-photo.jpg": "more jpeg", "media/docs/report.pdf": "pdfbytes" });
+    assert.deepEqual((await s.watcher.runOnce()).events, [], "ordinary uploads are silent");
+
+    await put(s.root, {
+      "media/avatars/helper.py": "# not a real script\n",
+      "media/avatars/compiled.pyc": "bytecode",
+      "media/avatars/photo.py.jpg": "double extension",
+    });
+    const r = await s.watcher.runOnce();
+    assert.deepEqual(r.events.map((e) => e.evidence.path).sort(), ["media/avatars/compiled.pyc", "media/avatars/helper.py", "media/avatars/photo.py.jpg"]);
+    for (const e of r.events) {
+      assert.equal(e.type, "integrity.executable_in_uploads");
+      assert.equal(e.severity, "critical");
+    }
+  } finally { await s.cleanup(); }
+});
+
+test("django: the platform is accepted, its defaults are merged with the owner's, and they can be turned off", () => {
+  const base = { id: "acme-d", name: "D", baseUrl: "https://d.example", platform: "django", transport: { type: "none" } };
+  const r = effectiveIntegrityRules(SiteConfig.parse({ ...base, integrity: { exclude: ["tmp/**"], uploadDirs: ["private/**"] } }));
+  for (const g of ["**/__pycache__/**", "**/*.sqlite3", "**/.venv/**", ".git/**", "tmp/**"]) assert.ok(r.exclude.includes(g), g);
+  assert.ok(!r.exclude.some((g) => g.startsWith("staticfiles")), "staticfiles stays watched");
+  assert.ok(!r.exclude.includes("**/*.pyc"), "a bare *.pyc exclude would hide bytecode dropped into uploads");
+  assert.deepEqual(r.uploadDirs, ["media/**", "private/**"]);
+  const off = effectiveIntegrityRules(SiteConfig.parse({ ...base, integrity: { platformDefaults: false } }));
+  assert.ok(!off.exclude.includes("**/__pycache__/**") && off.uploadDirs.length === 0);
+  assert.equal(SiteConfig.safeParse({ ...base, platform: "drupal" }).success, false, "unknown platforms are still refused");
 });

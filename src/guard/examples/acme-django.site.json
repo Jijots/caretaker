@@ -1,0 +1,25 @@
+{
+  "id": "acme-studio",
+  "name": "Acme Design Studio (Django on a VPS)",
+  "baseUrl": "https://acmestudio.example.ph",
+  "platform": "django",
+  "timezone": "Asia/Manila",
+  "transport": { "type": "local-fs", "root": "/srv/acme-studio/app" },
+  "pages": ["/", "/portfolio", "/contact"],
+  "deployWindows": [
+    { "days": ["mon", "tue", "wed", "thu"], "start": "10:00", "end": "16:00", "note": "deploys are pulled from git by hand, mid-week only" }
+  ],
+  "pageRegions": [
+    { "page": "/", "selector": ".latest-projects", "reason": "the homepage lists the newest portfolio entries from the database" },
+    { "page": "*", "selector": "#csrf-field", "reason": "Django renders a fresh CSRF token on every load" }
+  ],
+  "integrity": {
+    "exclude": ["tmp/**"],
+    "uploadDirs": ["private-uploads/**"]
+  },
+  "owner": { "telegramChatIdEnv": "GUARD_TELEGRAM_CHAT_ACME_STUDIO" },
+  "responder": {
+    "enabled": false,
+    "mode": "dry-run"
+  }
+}

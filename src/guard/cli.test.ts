@@ -27,7 +27,7 @@ test("help lists every command and states that nothing here changes a site", () 
 });
 
 test("validate accepts each shipped example and reports what it found", () => {
-  for (const f of ["acme-clinic.site.json", "acme-shop.site.json", "acme-wix.site.json"]) {
+  for (const f of ["acme-clinic.site.json", "acme-shop.site.json", "acme-wix.site.json", "acme-django.site.json"]) {
     const r = guard(["validate", example(f)]);
     assert.equal(r.code, 0, `${f}: ${r.out}`);
     assert.match(strip(r.out), /^ok acme-/);

@@ -178,7 +178,7 @@ export const PageRules = z
   .strict();
 export type PageRules = z.infer<typeof PageRules>;
 
-export const SITE_PLATFORMS = ["wordpress", "nextjs", "laravel", "codeigniter", "wix", "static", "other"] as const;
+export const SITE_PLATFORMS = ["wordpress", "nextjs", "laravel", "codeigniter", "django", "wix", "static", "other"] as const;
 
 export const SiteConfig = z
   .object({
@@ -354,6 +354,12 @@ export const PLATFORM_INTEGRITY: Record<SiteConfig["platform"], { exclude: strin
     uploadDirs: ["writable/uploads/**", "public/uploads/**", "uploads/**"],
   },
   nextjs: { exclude: [".next/cache/**", "node_modules/.cache/**"], uploadDirs: ["public/uploads/**"] },
+  // Django: only what really churns. staticfiles/ (collectstatic output) is deliberately NOT excluded: it
+  // changes only on deploy, and JavaScript injected into served static files is a classic attack.
+  django: {
+    exclude: ["**/__pycache__/**", "**/*.sqlite3", "**/*.sqlite3-journal", "**/*.log", "logs/**", "**/venv/**", "**/.venv/**"],
+    uploadDirs: ["media/**"],
+  },
   static: { exclude: [], uploadDirs: [] },
   wix: { exclude: [], uploadDirs: [] },
   other: { exclude: [], uploadDirs: [] },
